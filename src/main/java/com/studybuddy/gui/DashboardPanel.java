@@ -7,6 +7,11 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.Window;
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -15,12 +20,18 @@ import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.SwingUtilities;
 import javax.swing.border.EmptyBorder;
+
+import com.studybuddy.dao.StudyTaskDAO;
+import com.studybuddy.dao.SubjectDAO;
+import com.studybuddy.model.StudyTask;
+import com.studybuddy.model.Subject;
+
 
 public class DashboardPanel extends JPanel {
     
     private final Color backgroundColor = new Color(244, 246, 251);
-    private final Color sidebarColor = new Color(23, 32, 51);
     private final Color accentColor = new Color(99, 102, 241);
     private final Color textColor = new Color(30, 41, 59);
     private final Color mutedColor = new Color(107, 119, 140);
@@ -48,31 +59,63 @@ public class DashboardPanel extends JPanel {
         header.add(greeting);
         header.add(Box.createVerticalStrut(8));
         header.add(subtitle);
-
         dashboard.add(header, BorderLayout.NORTH);
 
-        // Main content
+        // Load data from MySQL
+        List<StudyTask> tasks = loadTasks();
+        List<Subject> subjects = loadSubjects();
+
+        Map<Integer, String> subjectNames = new HashMap<>();
+        for (Subject subject : subjects) {
+                subjectNames.put(
+                subject.getSubjectId(),
+                subject.getSubjectName()
+                );
+        }
+
+        int totalTasks = tasks.size();
+
+        int completedTasks = (int) tasks.stream()
+                .filter(task -> "COMPLETED".equals(task.getStatus()))
+                .count();
+
+        int pendingTasks = (int) tasks.stream()
+                .filter(task -> "PENDING".equals(task.getStatus()))
+                .count();
+
+        int progress = totalTasks == 0
+                ? 0
+                : (completedTasks * 100 / totalTasks);
+
+        // Statistics cards
         JPanel content = new JPanel(new BorderLayout(0, 22));
         content.setOpaque(false);
 
         JPanel stats = new JPanel(new GridLayout(1, 4, 14, 0));
         stats.setOpaque(false);
 
-        stats.add(createStatCard("TOTAL TASKS", "12", "Tasks created",
-                new Color(99, 102, 241)));
+        stats.add(createStatCard(
+                "TOTAL TASKS", String.valueOf(totalTasks),
+                "Tasks created", new Color(99, 102, 241)
+        ));
 
-        stats.add(createStatCard("COMPLETED", "7", "Tasks finished",
-                new Color(16, 150, 116)));
+        stats.add(createStatCard(
+                "COMPLETED", String.valueOf(completedTasks),
+                "Tasks finished", new Color(16, 150, 116)
+        ));
 
-        stats.add(createStatCard("PENDING", "5", "Tasks remaining",
-                new Color(217, 119, 6)));
+        stats.add(createStatCard(
+                "PENDING", String.valueOf(pendingTasks),
+                "Tasks remaining", new Color(217, 119, 6)
+        ));
 
-        stats.add(createStatCard("PROGRESS", "58%", "Overall completion",
-                new Color(124, 83, 210)));
+        stats.add(createStatCard(
+                "PROGRESS", progress + "%",
+                "Overall completion", new Color(124, 83, 210)
+        ));
 
         content.add(stats, BorderLayout.NORTH);
-        content.add(createTasksPanel(), BorderLayout.CENTER);
-
+        content.add(createTasksPanel(tasks, subjectNames), BorderLayout.CENTER);
         dashboard.add(content, BorderLayout.CENTER);
 
         // Quick actions
@@ -85,40 +128,44 @@ public class DashboardPanel extends JPanel {
         JButton startTimer = new JButton("Start Study Timer");
         styleSecondaryButton(startTimer);
 
-        addTask.addActionListener(e ->
-                JOptionPane.showMessageDialog(
-                        this,
-                        "The task creation form will be added next."
-                )
-        );
+        addTask.addActionListener(e -> {
+                Window owner = SwingUtilities.getWindowAncestor(this);
+
+                AddTaskDialog dialog = new AddTaskDialog(
+                owner,
+                this::refreshDashboard
+                );
+
+                dialog.setVisible(true);
+        });
 
         startTimer.addActionListener(e ->
                 JOptionPane.showMessageDialog(
-                        this,
-                        "The multithreaded study timer will be added next."
+                this,
+                "The multithreaded study timer will be added next."
                 )
         );
 
         actions.add(addTask);
         actions.add(startTimer);
-
         dashboard.add(actions, BorderLayout.SOUTH);
 
         return dashboard;
-    }
+}
 
 
     private JPanel createStatCard(
-            String title, String value, String description, Color accent) {
+        String title, String value, String description, Color accent) {
 
         JPanel card = new JPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
         card.setBackground(Color.WHITE);
         card.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(
-                        0, 4, 0, 0, accent
-                ),
-                new EmptyBorder(18, 16, 18, 12)
+        BorderFactory.createMatteBorder(
+                0, 4, 0, 0, accent
+        ),
+        
+        new EmptyBorder(18, 16, 18, 12)
         ));
 
         JLabel heading = new JLabel(title);
@@ -142,50 +189,121 @@ public class DashboardPanel extends JPanel {
         return card;
     }
 
-    private JPanel createTasksPanel() {
-        JPanel panel = new JPanel(new BorderLayout(0, 15));
-        panel.setBackground(Color.WHITE);
-        panel.setBorder(new EmptyBorder(22, 22, 18, 22));
+        private JPanel createTasksPanel(
+                List<StudyTask> tasks,
+                Map<Integer, String> subjectNames) {
 
-        JLabel heading = new JLabel("Upcoming Tasks");
-        heading.setFont(new Font("SansSerif", Font.BOLD, 19));
-        heading.setForeground(textColor);
+                JPanel panel = new JPanel(new BorderLayout(0, 15));
+                panel.setBackground(Color.WHITE);
+                panel.setBorder(new EmptyBorder(22, 22, 18, 22));
 
-        panel.add(heading, BorderLayout.NORTH);
+                JLabel heading = new JLabel("Upcoming Tasks");
+                heading.setFont(new Font("SansSerif", Font.BOLD, 19));
+                heading.setForeground(textColor);
+                panel.add(heading, BorderLayout.NORTH);
 
-        JPanel taskList = new JPanel();
-        taskList.setBackground(Color.WHITE);
-        taskList.setLayout(new BoxLayout(taskList, BoxLayout.Y_AXIS));
+                JPanel taskList = new JPanel();
+                taskList.setBackground(Color.WHITE);
+                taskList.setLayout(new BoxLayout(taskList, BoxLayout.Y_AXIS));
 
-        taskList.add(createTaskRow(
-                "Java inheritance practice",
-                "Java  |  High priority",
-                new Color(217, 119, 6)
-        ));
+                List<StudyTask> pendingTasks = tasks.stream()
+                .filter(task -> "PENDING".equals(task.getStatus()))
+                .toList();
 
-        taskList.add(createDivider());
+                if (pendingTasks.isEmpty()) {
+                JLabel emptyMessage = new JLabel(
+                "No pending tasks. Add a task to get started!"
+                );
+                emptyMessage.setFont(new Font("SansSerif", Font.PLAIN, 13));
+                emptyMessage.setForeground(mutedColor);
+                emptyMessage.setBorder(new EmptyBorder(18, 4, 18, 4));
 
-        taskList.add(createTaskRow(
-                "DBMS revision",
-                "DBMS  |  Medium priority",
-                accentColor
-        ));
+                taskList.add(emptyMessage);
+                } else {
+                int displayedCount = 0;
 
-        taskList.add(createDivider());
+                for (StudyTask task : pendingTasks) {
+                // Show at most five upcoming tasks on the dashboard.
+                if (displayedCount >= 5) {
+                break;
+                }
 
-        taskList.add(createTaskRow(
-                "Operating Systems notes",
-                "OS  |  Low priority",
-                new Color(16, 150, 116)
-        ));
+                String subjectName = subjectNames.getOrDefault(
+                task.getSubjectId(), "Unknown subject"
+                );
 
-        panel.add(taskList, BorderLayout.CENTER);
+                String dueDateText = task.getDueDate() == null
+                ? "No due date"
+                : "Due: " + task.getDueDate();
 
-        return panel;
-    }
+                String detail = subjectName
+                + "  |  " + task.getPriority() + " priority"
+                + "  |  " + dueDateText;
+
+                Color priorityColor;
+
+                switch (task.getPriority()) {
+                case "HIGH" ->
+                        priorityColor = new Color(217, 119, 6);
+                case "LOW" ->
+                        priorityColor = new Color(16, 150, 116);
+                default ->
+                        priorityColor = accentColor;
+                }
+
+                taskList.add(createTaskRow(
+                task.getTitle(), detail, priorityColor
+                ));
+
+                taskList.add(createDivider());
+                displayedCount++;
+                }
+                }
+
+                panel.add(taskList, BorderLayout.CENTER);
+                return panel;
+        }
+
+                
+        private List<StudyTask> loadTasks() {
+                try {
+                        return new StudyTaskDAO().getAllTasks();
+                } catch (SQLException ex) {
+                        JOptionPane.showMessageDialog(
+                        this,
+                        "Could not load tasks from MySQL.\n" + ex.getMessage(),
+                        "Database Error",
+                        JOptionPane.ERROR_MESSAGE
+                        );
+                        return List.of();
+                }
+        }
+
+        private List<Subject> loadSubjects() {
+                try {
+                        return new SubjectDAO().getAllSubjects();
+                } catch (SQLException ex) {
+                        JOptionPane.showMessageDialog(
+                        this,
+                        "Could not load subjects from MySQL.\n" + ex.getMessage(),
+                        "Database Error",
+                        JOptionPane.ERROR_MESSAGE
+                        );
+                        return List.of();
+                }
+        }
+
+        
+        public void refreshDashboard() {
+                removeAll();
+                add(createDashboard(), BorderLayout.CENTER);
+                revalidate();
+                repaint();
+        }
+
 
     private JPanel createTaskRow(
-            String title, String detail, Color accent) {
+        String title, String detail, Color accent) {
 
         JPanel row = new JPanel(new BorderLayout(14, 0));
         row.setBackground(Color.WHITE);
